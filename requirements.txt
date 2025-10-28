@@ -1,8 +1,9 @@
-fastapi==0.120.1
-numpy==2.3.4
-openai==2.6.1
-pydantic==2.12.3
-pydantic_settings==2.11.0
-Requests==2.32.5
-sentence_transformers==2.7.0
-uvicorn==0.38.0
+fastapi>=0.104.1,<1.0.0
+uvicorn[standard]>=0.24.0,<1.0.0
+sentence-transformers>=2.2.2,<3.0.0
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+numpy>=1.26.0,<2.0.0
+openai==1.35.13
+requests==2.32.3

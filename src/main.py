@@ -5,16 +5,16 @@ from openai import OpenAI, AuthenticationError, APITimeoutError
 # --- 1. Configuration ---
 
 #  Please enter your DeepSeek API key here
-os.environ["DEEPSEEK_API_KEY"] = "sk-60b1be137abf445c9d23f5ddb899b363"
+os.environ["DEEPSEEK_API_KEY"] = "sk-60b1be137abf445c9d23f5ddb899b363"  # Use your key
 
-# Address of your Cognio server (make sure it's running)
-COGNIO_BASE_URL = "http://localhost:8080"
+# Address of your Memory server (make sure it's running)
+MEMORY_BASE_URL = "http://localhost:8080"
 
 
-# --- 2. Cognio Client  ---
+# --- 2. Memory Client  ---
 
-class CognioClient:
-    """Python client for interacting with the local Cognio server"""
+class MemoryClient:
+    """Python client for interacting with the local Memory server"""
 
     def __init__(self, base_url):
         self.base_url = base_url
@@ -24,18 +24,18 @@ class CognioClient:
         self.headers["X-API-Key"] = api_key
 
     def check_health(self):
-        """Check if the Cognio server is running"""
+        """Check if the Memory server is running"""
         try:
             response = requests.get(f"{self.base_url}/health")
             response.raise_for_status()
-            print(f"Cognio server connected successfully (at {self.base_url})")
+            print(f"Memory server connected successfully (at {self.base_url})")
             return True
         except requests.exceptions.ConnectionError:
-            print(f"Error: Could not connect to Cognio server at {self.base_url}")
-            print("Please ensure you are running 'uvicorn src.main:app --port 8080' in another terminal")
+            print(f"Error: Could not connect to Memory server at {self.base_url}")
+            print("Please ensure you are running 'uvicorn src.server:app --port 8080' in another terminal")
             return False
         except requests.exceptions.RequestException as e:
-            print(f"Cognio server error: {e}")
+            print(f"Memory server error: {e}")
             return False
 
     def save_memory(self, text, project, tags=None):
@@ -51,7 +51,7 @@ class CognioClient:
             print(f"\n[!!!] Error saving memory (HTTP Error): {e}\n")
             return None
 
-    def search_memory(self, query, project, limit=3, threshold=0.3):
+    def search_memory(self, query, project, limit=3, threshold=0.2):
         """
         (Retrieve) Search for relevant memories
         """
@@ -116,13 +116,13 @@ def summarize_facts_for_memory(client, user_message, ai_response):
 
 # --- 4. Core Chat Loop ---
 
-def chat_with_memory(cognio_client, deepseek_client, user_id, user_message, chat_history):
+def chat_with_memory(memory_client, deepseek_client, user_id, user_message, chat_history):
     """
     Execute the full Retrieve-Inject-Store loop
     """
     # 1. "Retrieve"
-    print("... Retrieving memories from Cognio ...")
-    relevant_memories = cognio_client.search_memory(
+    print("... Retrieving memories from Memory Server ...")
+    relevant_memories = memory_client.search_memory(
         query=user_message,
         project=user_id
     )
@@ -133,7 +133,7 @@ def chat_with_memory(cognio_client, deepseek_client, user_id, user_message, chat
         "Please provide a personalized response to the user's latest question based on the following long-term memories and short-term conversation history."
     )
     if relevant_memories:
-        system_instruction += "\n\n--- Long-term Memory (from Cognio) ---\n"
+        system_instruction += "\n\n--- Long-term Memory (from Memory Server) ---\n"
         for i, mem in enumerate(relevant_memories):
             # We print the score for debugging
             print(f"    -> Retrieved memory (Score: {mem['score']:.2f}): {mem['text']}")
@@ -156,9 +156,9 @@ def chat_with_memory(cognio_client, deepseek_client, user_id, user_message, chat
     new_fact = summarize_facts_for_memory(deepseek_client, user_message, ai_response)
 
     if new_fact:
-        print(f"... Saving new fact to Cognio: {new_fact} ...")
+        print(f"... Saving new fact to Memory Server: {new_fact} ...")
         #
-        save_result = cognio_client.save_memory(
+        save_result = memory_client.save_memory(
             text=new_fact,
             project=user_id,
             tags=["auto-summary", "deepseek"]
@@ -166,7 +166,7 @@ def chat_with_memory(cognio_client, deepseek_client, user_id, user_message, chat
         if save_result:
             print(f"    -> Save successful (ID: {save_result.get('id')})")
         else:
-            print("    -> (!!!) Save FAILED (Check Cognio server logs) (!!!)")
+            print("    -> (!!!) Save FAILED (Check Memory server logs) (!!!)")
     else:
         print("... DeepSeek found no new facts to store ...")
 
@@ -180,9 +180,9 @@ def main():
         print("Error: Please set your DEEPSEEK_API_KEY on line 11 of the script.")
         return
 
-    cognio = CognioClient(COGNIO_BASE_URL)
+    memory = MemoryClient(MEMORY_BASE_URL)
 
-    if not cognio.check_health():
+    if not memory.check_health():
         return
 
     try:
@@ -201,7 +201,7 @@ def main():
         return
 
     print("\n" + "=" * 50)
-    print(" Welcome to the Cognio Memory Chatbot (DeepSeek Edition)")
+    print(" Welcome to the Memory Chatbot (DeepSeek Edition)")
     print("=" * 50 + "\n")
 
     USER_ID = ""
@@ -231,7 +231,7 @@ def main():
             continue
 
         ai_reply = chat_with_memory(
-            cognio_client=cognio,
+            memory_client=memory,
             deepseek_client=client,
             user_id=USER_ID,
             user_message=user_input,
