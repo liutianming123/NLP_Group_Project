@@ -2,12 +2,12 @@
 
 
 
-This project implements a personalized AI chatbot that uses the DeepSeek API for language generation and the Cognio server for persistent, long-term memory. This allows the chatbot to remember user-specific information (like your name or preferences) across separate conversations.
+This project implements a personalized AI chatbot that uses the DeepSeek API for language generation and the memory server for persistent, long-term memory. This allows the chatbot to remember user-specific information (like your name or preferences) across separate conversations.
 
 This system consists of two main components:
 
-1. **The Cognio Server (`src/server.py`)**: A backend service that stores and retrieves memories from a database.
-2. **The Chatbot Client (`main.py`)**: An interactive command-line interface that connects to DeepSeek and the Cognio Server.
+1. **The memory Server (`src/server.py`)**: A backend service that stores and retrieves memories from a database.
+2. **The Chatbot Client (`main.py`)**: An interactive command-line interface that connects to DeepSeek and the memory server.
 
 
 
@@ -52,11 +52,11 @@ This project requires **two separate terminals** to run simultaneously.
 
 
 
-### Terminal 1: Start the Cognio Memory Server
+### Terminal 1: Start the Memory Server
 
 
 
-In your first terminal, navigate to the project's root directory and start the Cognio server using `uvicorn`. This application listens for requests to save or retrieve memories.
+In your first terminal, navigate to the project's root directory and start the Memory server using `uvicorn`. This application listens for requests to save or retrieve memories.
 
 (Note: This command assumes you have renamed `src/main.py` to `src/server.py`).
 
@@ -116,4 +116,4 @@ python main.py
 
 - **AI can't remember facts (like my name)**: This is likely due to the semantic search threshold. The query ("What is my name?") might not be "similar" enough to the stored fact ("My name is...").
   - **Fix**: Open `main.py`, find the `search_memory` function, and lower the `threshold` value (e.g., from `0.3` to `0.2`) to make the search "less strict".
-- **How to clear all memory**: Stop the Cognio server (Terminal 1) and delete the `memory.db` file from the `data/` directory. Restart the server to create a fresh, empty database.
+- **How to clear all memory**: Stop the memory server and delete the `memory.db` file from the `data/` directory. Restart the server to create a fresh, empty database.
