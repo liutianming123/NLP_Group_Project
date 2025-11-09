@@ -1,11 +1,10 @@
-"""Configuration management for MemoryMCP."""
+"""Configuration management"""
 
 from pathlib import Path
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
+class AppConfig(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Database
@@ -33,15 +32,15 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    def get_db_dir(self) -> Path:
+    def fetch_db_directory(self) -> Path:
         """Get database directory path."""
         return Path(self.db_path).parent
 
-    def ensure_db_dir(self) -> None:
+    def validate_db_directory_exists(self) -> None:
         """Create database directory if it doesn't exist."""
-        db_dir = self.get_db_dir()
+        db_dir = self.fetch_db_directory()
         db_dir.mkdir(parents=True, exist_ok=True)
 
 
 # Global settings instance
-settings = Settings()
+app_config = AppConfig()

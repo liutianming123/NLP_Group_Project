@@ -1,19 +1,19 @@
-"""Utility functions for Cognio."""
+"""Utility functions"""
 
 import hashlib
 from datetime import datetime
 
 
-def generate_text_hash(text: str) -> str:
+def create_content_hash(content: str) -> str:
     """Generate SHA256 hash of text for deduplication."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def get_timestamp() -> int:
+def current_timestamp_seconds() -> int:
     """Get current Unix timestamp."""
     return int(datetime.now().timestamp())
 
 
-def format_timestamp(timestamp: int) -> str:
+def timestamp_to_iso_str(ts: int) -> str:
     """Convert Unix timestamp to ISO 8601 string."""
-    return datetime.fromtimestamp(timestamp).isoformat() + "Z"
+    return datetime.fromtimestamp(ts).isoformat() + "Z"

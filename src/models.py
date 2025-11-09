@@ -3,64 +3,64 @@
 from pydantic import BaseModel, Field
 
 # Constants
-_FILTER_BY_PROJECT_DESC = "Filter by project"
+_PROJECT_FILTER_DESCRIPTION = "Filter by a specific project"
 
 
 # Request models
-class SaveMemoryRequest(BaseModel):
-    """Request to save a new memory."""
+class StoreMemoryInput(BaseModel):
+    """DTO for saving a new memory."""
 
-    text: str = Field(..., max_length=10000, description="Memory text content")
-    project: str | None = Field(None, max_length=100, description="Project name")
-    tags: list[str] = Field(default_factory=list, description="Tags for categorization")
-
-
-class SearchMemoryParams(BaseModel):
-    """Parameters for searching memories."""
-
-    q: str = Field(..., description="Search query")
-    project: str | None = Field(None, description=_FILTER_BY_PROJECT_DESC)
-    tags: str | None = Field(None, description="Comma-separated tags")
-    limit: int = Field(5, ge=1, le=50, description="Maximum results")
-    threshold: float = Field(0.7, ge=0.0, le=1.0, description="Minimum similarity score")
+    text: str = Field(..., max_length=10000, description="The textual content of the memory")
+    project: str | None = Field(None, max_length=100, description="Categorization project")
+    tags: list[str] = Field(default_factory=list, description="List of associated tags")
 
 
-class ListMemoriesParams(BaseModel):
+class QueryMemoryParams(BaseModel):
+    """Parameters for memory search operations."""
+
+    q: str = Field(..., description="The search query text")
+    project: str | None = Field(None, description=_PROJECT_FILTER_DESCRIPTION)
+    tags: str | None = Field(None, description="A comma-delimited string of tags")
+    limit: int = Field(5, ge=1, le=50, description="Max number of results to return")
+    threshold: float = Field(0.7, ge=0.0, le=1.0, description="Minimum similarity score cutoff")
+
+
+class ListMemoryParams(BaseModel):
     """Parameters for listing memories."""
 
-    project: str | None = Field(None, description=_FILTER_BY_PROJECT_DESC)
-    tags: str | None = Field(None, description="Comma-separated tags")
-    page: int = Field(1, ge=1, description="Page number")
-    limit: int = Field(20, ge=1, le=100, description="Items per page")
-    sort: str = Field("date", pattern="^(date|relevance)$", description="Sort order")
+    project: str | None = Field(None, description=_PROJECT_FILTER_DESCRIPTION)
+    tags: str | None = Field(None, description="A comma-delimited string of tags")
+    page: int = Field(1, ge=1, description="Page number for pagination")
+    limit: int = Field(20, ge=1, le=100, description="Number of items per page")
+    sort: str = Field("date", pattern="^(date|relevance)$", description="Sorting criteria")
 
 
-class BulkDeleteRequest(BaseModel):
-    """Request to bulk delete memories."""
+class BulkRemovalRequest(BaseModel):
+    """DTO for bulk deleting memories."""
 
-    project: str | None = Field(None, description="Delete by project")
-    before_date: str | None = Field(None, description="Delete before date (ISO 8601)")
+    project: str | None = Field(None, description="Delete all memories in this project")
+    before_date: str | None = Field(None, description="Delete memories older than this ISO 8601 date")
 
 
-class ExportParams(BaseModel):
-    """Parameters for exporting memories."""
+class ExportOptions(BaseModel):
+    """Parameters for memory export."""
 
-    format: str = Field("json", pattern="^(json|markdown)$", description="Export format")
-    project: str | None = Field(None, description=_FILTER_BY_PROJECT_DESC)
+    format: str = Field("json", pattern="^(json|markdown)$", description="Output format")
+    project: str | None = Field(None, description=_PROJECT_FILTER_DESCRIPTION)
 
 
 # Response models
-class SaveMemoryResponse(BaseModel):
-    """Response from saving a memory."""
+class StoreMemoryOutput(BaseModel):
+    """Response after saving a memory."""
 
-    id: str = Field(..., description="Memory UUID")
-    saved: bool = Field(..., description="Whether save was successful")
-    reason: str = Field(..., description="Status reason (created/duplicate)")
-    duplicate: bool = Field(..., description="Whether this is a duplicate")
+    id: str = Field(..., description="The unique ID of the memory")
+    saved: bool = Field(..., description="Indicates if the save was successful")
+    reason: str = Field(..., description="Status message (e.g., 'created', 'duplicate')")
+    duplicate: bool = Field(..., description="Flag indicating if the content was a duplicate")
 
 
-class MemoryResult(BaseModel):
-    """A single memory search result."""
+class RetrievedMemory(BaseModel):
+    """Represents a single memory item in results."""
 
     id: str
     text: str
@@ -70,38 +70,38 @@ class MemoryResult(BaseModel):
     created_at: str
 
 
-class SearchMemoryResponse(BaseModel):
-    """Response from searching memories."""
+class QueryMemoryOutput(BaseModel):
+    """Response from a memory search."""
 
     query: str
-    results: list[MemoryResult]
+    results: list[RetrievedMemory]
     total: int
 
 
-class ListMemoriesResponse(BaseModel):
-    """Response from listing memories."""
+class ListMemoryOutput(BaseModel):
+    """Paginated response from listing memories."""
 
-    memories: list[MemoryResult]
+    memories: list[RetrievedMemory]
     page: int
     total_pages: int
     total_items: int
 
 
-class DeleteMemoryResponse(BaseModel):
-    """Response from deleting a memory."""
+class DeletionResult(BaseModel):
+    """Response from a delete operation."""
 
     deleted: bool
     id: str
 
 
-class BulkDeleteResponse(BaseModel):
-    """Response from bulk deleting memories."""
+class BulkRemovalOutput(BaseModel):
+    """Response from a bulk delete operation."""
 
     deleted_count: int
 
 
-class StatsResponse(BaseModel):
-    """Response with memory statistics."""
+class StatisticsResponse(BaseModel):
+    """Database statistics response."""
 
     total_memories: int
     total_projects: int
@@ -111,8 +111,8 @@ class StatsResponse(BaseModel):
 
 
 # Internal models
-class Memory(BaseModel):
-    """Internal memory representation."""
+class MemoryRecord(BaseModel):
+    """Internal data structure for a memory."""
 
     id: str
     text: str

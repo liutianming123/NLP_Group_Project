@@ -1,30 +1,29 @@
-"""Database management for Cognio."""
+"""Database management"""
 
 import json
 import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
-
-from .config import settings
-from .models import Memory
+from .config import app_config
+from .models import MemoryRecord
 
 logger = logging.getLogger(__name__)
 
 # Constants
-_DB_NOT_CONNECTED_ERROR = "Database not connected"
-_PROJECT_FILTER_SQL = " AND project = ?"
+_ERR_DB_NOT_READY = "Database connection is not initialized"
+_PROJECT_FILTER_CLAUSE = " AND project = ?"
 
 
-class Database:
+class DataPersistence:
     """SQLite database manager for memories."""
 
     def __init__(self, db_path: str | None = None) -> None:
         """Initialize database connection."""
-        self.db_path = db_path or settings.db_path
+        self.db_path = db_path or app_config.db_path
         self.conn: sqlite3.Connection | None = None
 
-    def connect(self) -> None:
+    def initialize_connection(self) -> None:
         """Create database connection and initialize schema."""
         # Ensure directory exists
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -32,15 +31,15 @@ class Database:
         # Connect to database
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        logger.info(f"Connected to database: {self.db_path}")
+        logger.info(f"Database connection established: {self.db_path}")
 
         # Initialize schema
-        self._init_schema()
+        self._create_tables()
 
-    def _init_schema(self) -> None:
+    def _create_tables(self) -> None:
         """Create tables if they don't exist."""
         if self.conn is None:
-            raise RuntimeError(_DB_NOT_CONNECTED_ERROR)
+            raise RuntimeError(_ERR_DB_NOT_READY)
 
         cursor = self.conn.cursor()
 
@@ -68,36 +67,36 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_archived ON memories(archived)")
 
         self.conn.commit()
-        logger.info("Database schema initialized")
+        logger.info("Database schema has been verified and initialized.")
 
-    def close(self) -> None:
+    def close_connection(self) -> None:
         """Close database connection."""
         if self.conn:
             self.conn.close()
-            logger.info("Database connection closed")
+            logger.info("Database connection closed.")
 
-    def execute(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
+    def execute_query(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         """Execute a query and return cursor."""
         if self.conn is None:
-            raise RuntimeError(_DB_NOT_CONNECTED_ERROR)
+            raise RuntimeError(_ERR_DB_NOT_READY)
         return self.conn.execute(query, params)
 
-    def commit(self) -> None:
+    def commit_transaction(self) -> None:
         """Commit current transaction."""
         if self.conn is None:
-            raise RuntimeError(_DB_NOT_CONNECTED_ERROR)
+            raise RuntimeError(_ERR_DB_NOT_READY)
         self.conn.commit()
 
-    def save_memory(self, memory: Memory) -> None:
+    def persist_memory_record(self, memory: MemoryRecord) -> None:
         """Save a memory to database."""
-        embedding_bytes = None
+        embedding_blob = None
         if memory.embedding:
             # Convert embedding list to bytes (simple JSON encoding for SQLite)
-            embedding_bytes = json.dumps(memory.embedding).encode("utf-8")
+            embedding_blob = json.dumps(memory.embedding).encode("utf-8")
 
-        tags_str = json.dumps(memory.tags)
+        tags_json_str = json.dumps(memory.tags)
 
-        self.execute(
+        self.execute_query(
             """
             INSERT INTO memories (id, text, text_hash, embedding, project, tags, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -106,28 +105,28 @@ class Database:
                 memory.id,
                 memory.text,
                 memory.text_hash,
-                embedding_bytes,
+                embedding_blob,
                 memory.project,
-                tags_str,
+                tags_json_str,
                 memory.created_at,
                 memory.updated_at,
             ),
         )
-        self.commit()
+        self.commit_transaction()
 
-    def get_memory_by_id(self, memory_id: str) -> Memory | None:
+    def fetch_memory_by_uuid(self, memory_id: str) -> MemoryRecord | None:
         """Retrieve a memory by ID."""
-        cursor = self.execute("SELECT * FROM memories WHERE id = ?", (memory_id,))
+        cursor = self.execute_query("SELECT * FROM memories WHERE id = ?", (memory_id,))
         row = cursor.fetchone()
 
         if row is None:
             return None
 
-        return self._row_to_memory(row)
+        return self._map_row_to_memory_object(row)
 
-    def get_memory_by_hash(self, text_hash: str) -> Memory | None:
+    def fetch_memory_by_content_hash(self, text_hash: str) -> MemoryRecord | None:
         """Retrieve a memory by text hash (for deduplication)."""
-        cursor = self.execute(
+        cursor = self.execute_query(
             "SELECT * FROM memories WHERE text_hash = ? AND archived = 0", (text_hash,)
         )
         row = cursor.fetchone()
@@ -135,98 +134,98 @@ class Database:
         if row is None:
             return None
 
-        return self._row_to_memory(row)
+        return self._map_row_to_memory_object(row)
 
-    def list_memories(
+    def retrieve_paginated_memories(
         self,
         project: str | None = None,
         tags: list[str] | None = None,
         limit: int = 20,
         offset: int = 0,
-    ) -> list[Memory]:
+    ) -> list[MemoryRecord]:
         """List memories with optional filtering."""
         query = "SELECT * FROM memories WHERE archived = 0"
         params: list[Any] = []
 
         if project:
-            query += _PROJECT_FILTER_SQL
+            query += _PROJECT_FILTER_CLAUSE
             params.append(project)
 
         if tags:
             # Simple tag filtering (checks if ANY tag matches)
-            tag_conditions = " OR ".join(["tags LIKE ?" for _ in tags])
-            query += f" AND ({tag_conditions})"
+            tag_clauses = " OR ".join(["tags LIKE ?" for _ in tags])
+            query += f" AND ({tag_clauses})"
             params.extend([f'%"{tag}"%' for tag in tags])
 
         query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
-        cursor = self.execute(query, tuple(params))
+        cursor = self.execute_query(query, tuple(params))
         rows = cursor.fetchall()
 
-        return [self._row_to_memory(row) for row in rows]
+        return [self._map_row_to_memory_object(row) for row in rows]
 
-    def count_memories(self, project: str | None = None, tags: list[str] | None = None) -> int:
+    def count_total_memories(self, project: str | None = None, tags: list[str] | None = None) -> int:
         """Count total memories with optional filtering."""
         query = "SELECT COUNT(*) FROM memories WHERE archived = 0"
         params: list[Any] = []
 
         if project:
-            query += _PROJECT_FILTER_SQL
+            query += _PROJECT_FILTER_CLAUSE
             params.append(project)
 
         if tags:
-            tag_conditions = " OR ".join(["tags LIKE ?" for _ in tags])
-            query += f" AND ({tag_conditions})"
+            tag_clauses = " OR ".join(["tags LIKE ?" for _ in tags])
+            query += f" AND ({tag_clauses})"
             params.extend([f'%"{tag}"%' for tag in tags])
 
-        cursor = self.execute(query, tuple(params))
+        cursor = self.execute_query(query, tuple(params))
         result = cursor.fetchone()
         return result[0] if result else 0
 
-    def delete_memory(self, memory_id: str) -> bool:
+    def hard_delete_memory(self, memory_id: str) -> bool:
         """Delete a memory by ID (hard delete)."""
-        cursor = self.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        self.commit()
+        cursor = self.execute_query("DELETE FROM memories WHERE id = ?", (memory_id,))
+        self.commit_transaction()
         return cursor.rowcount > 0
 
-    def archive_memory(self, memory_id: str) -> bool:
+    def soft_delete_memory(self, memory_id: str) -> bool:
         """Archive a memory by ID (soft delete)."""
-        cursor = self.execute(
+        cursor = self.execute_query(
             "UPDATE memories SET archived = 1 WHERE id = ? AND archived = 0", (memory_id,)
         )
-        self.commit()
+        self.commit_transaction()
         return cursor.rowcount > 0
 
-    def bulk_delete(self, project: str | None = None, before_timestamp: int | None = None) -> int:
+    def hard_bulk_delete(self, project: str | None = None, before_timestamp: int | None = None) -> int:
         """Bulk delete memories (hard delete)."""
         query = "DELETE FROM memories WHERE 1=1"
         params: list[Any] = []
 
         if project:
-            query += _PROJECT_FILTER_SQL
+            query += _PROJECT_FILTER_CLAUSE
             params.append(project)
 
         if before_timestamp:
             query += " AND created_at < ?"
             params.append(before_timestamp)
 
-        cursor = self.execute(query, tuple(params))
-        self.commit()
+        cursor = self.execute_query(query, tuple(params))
+        self.commit_transaction()
         return cursor.rowcount
 
-    def get_all_memories(self) -> list[Memory]:
+    def fetch_all_active_memories(self) -> list[MemoryRecord]:
         """Get all memories (for semantic search, excluding archived)."""
-        cursor = self.execute("SELECT * FROM memories WHERE archived = 0 ORDER BY created_at DESC")
+        cursor = self.execute_query("SELECT * FROM memories WHERE archived = 0 ORDER BY created_at DESC")
         rows = cursor.fetchall()
-        return [self._row_to_memory(row) for row in rows]
+        return [self._map_row_to_memory_object(row) for row in rows]
 
-    def get_stats(self) -> dict[str, Any]:
+    def collect_database_statistics(self) -> dict[str, Any]:
         """Get database statistics."""
-        total = self.count_memories()
+        total = self.count_total_memories()
 
         # Count by project (excluding archived)
-        cursor = self.execute(
+        cursor = self.execute_query(
             """
             SELECT project, COUNT(*) as count
             FROM memories
@@ -235,49 +234,49 @@ class Database:
             ORDER BY count DESC
             """
         )
-        by_project = {row["project"]: row["count"] for row in cursor.fetchall()}
+        project_counts = {row["project"]: row["count"] for row in cursor.fetchall()}
 
         # Get top tags (excluding archived)
-        cursor = self.execute("SELECT tags FROM memories WHERE tags IS NOT NULL AND archived = 0")
-        all_tags: dict[str, int] = {}
+        cursor = self.execute_query("SELECT tags FROM memories WHERE tags IS NOT NULL AND archived = 0")
+        tag_frequencies: dict[str, int] = {}
         for row in cursor.fetchall():
-            tags = json.loads(row["tags"])
-            for tag in tags:
-                all_tags[tag] = all_tags.get(tag, 0) + 1
+            tags_list = json.loads(row["tags"])
+            for tag in tags_list:
+                tag_frequencies[tag] = tag_frequencies.get(tag, 0) + 1
 
-        top_tags = sorted(all_tags.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_10_tags = sorted(tag_frequencies.items(), key=lambda item: item[1], reverse=True)[:10]
 
         # Calculate storage size
-        db_size = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
-        storage_mb = db_size / (1024 * 1024)
+        db_file_size = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
+        storage_size_mb = db_file_size / (1024 * 1024)
 
         return {
             "total_memories": total,
-            "total_projects": len(by_project),
-            "storage_mb": round(storage_mb, 2),
-            "by_project": by_project,
-            "top_tags": [tag for tag, _ in top_tags],
+            "total_projects": len(project_counts),
+            "storage_mb": round(storage_size_mb, 2),
+            "by_project": project_counts,
+            "top_tags": [tag for tag, _ in top_10_tags],
         }
 
-    def _row_to_memory(self, row: sqlite3.Row) -> Memory:
+    def _map_row_to_memory_object(self, row: sqlite3.Row) -> MemoryRecord:
         """Convert database row to Memory object."""
-        embedding = None
+        embedding_data = None
         if row["embedding"]:
-            embedding = json.loads(row["embedding"].decode("utf-8"))
+            embedding_data = json.loads(row["embedding"].decode("utf-8"))
 
-        tags = json.loads(row["tags"]) if row["tags"] else []
+        tag_data = json.loads(row["tags"]) if row["tags"] else []
 
-        return Memory(
+        return MemoryRecord(
             id=row["id"],
             text=row["text"],
             text_hash=row["text_hash"],
-            embedding=embedding,
+            embedding=embedding_data,
             project=row["project"],
-            tags=tags,
+            tags=tag_data,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
 
 
 # Global database instance
-db = Database()
+db_layer = DataPersistence()

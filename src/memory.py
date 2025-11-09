@@ -1,30 +1,30 @@
-"""Core memory operations for Cognio."""
+"""Core memory operations"""
 
 import logging
 import uuid
 from datetime import datetime
 from typing import Any
 
-from .config import settings
-from .database import db
-from .embeddings import embedding_service
-from .models import Memory, MemoryResult, SaveMemoryRequest
-from .utils import format_timestamp, generate_text_hash, get_timestamp
+from .config import app_config
+from .database import db_layer
+from .embeddings import vectorizer
+from .models import MemoryRecord, RetrievedMemory, StoreMemoryInput
+from .utils import create_content_hash, current_timestamp_seconds, timestamp_to_iso_str
 
 logger = logging.getLogger(__name__)
 
 # Constants
-_TIMEZONE_OFFSET = "+00:00"
+UTC_OFFSET_STR = "+00:00"
 
 
-class MemoryService:
+class CognitiveStore:
     """Service for managing memories."""
 
     def __init__(self) -> None:
         """Initialize memory service."""
         pass
 
-    def save_memory(self, request: SaveMemoryRequest) -> tuple[str, bool, str]:
+    def add_new_memory(self, request: StoreMemoryInput) -> tuple[str, bool, str]:
         """
         Save a new memory.
 
@@ -35,43 +35,43 @@ class MemoryService:
             Tuple of (memory_id, is_duplicate, reason)
         """
         # Validate text length
-        if len(request.text) > settings.max_text_length:
-            raise ValueError(f"Text exceeds maximum length of {settings.max_text_length}")
+        if len(request.text) > app_config.max_text_length:
+            raise ValueError(f"Text content exceeds max length of {app_config.max_text_length}")
 
         # Generate text hash for deduplication
-        text_hash = generate_text_hash(request.text)
+        content_hash = create_content_hash(request.text)
 
         # Check for duplicates
-        existing = db.get_memory_by_hash(text_hash)
-        if existing:
-            logger.info(f"Duplicate memory found: {existing.id}")
-            return existing.id, True, "duplicate"
+        existing_record = db_layer.fetch_memory_by_content_hash(content_hash)
+        if existing_record:
+            logger.info(f"Duplicate memory record detected: {existing_record.id}")
+            return existing_record.id, True, "duplicate"
 
         # Generate embedding
-        embedding = embedding_service.encode(request.text)
+        embedding_vector = vectorizer.generate_embedding(request.text)
 
         # Create memory object
-        memory_id = str(uuid.uuid4())
-        timestamp = get_timestamp()
+        new_memory_id = str(uuid.uuid4())
+        current_time = current_timestamp_seconds()
 
-        memory = Memory(
-            id=memory_id,
+        memory_dto = MemoryRecord(
+            id=new_memory_id,
             text=request.text,
-            text_hash=text_hash,
-            embedding=embedding,
+            text_hash=content_hash,
+            embedding=embedding_vector,
             project=request.project,
             tags=request.tags,
-            created_at=timestamp,
-            updated_at=timestamp,
+            created_at=current_time,
+            updated_at=current_time,
         )
 
         # Save to database
-        db.save_memory(memory)
-        logger.info(f"Memory saved: {memory_id}")
+        db_layer.persist_memory_record(memory_dto)
+        logger.info(f"New memory record persisted: {new_memory_id}")
 
-        return memory_id, False, "created"
+        return new_memory_id, False, "created"
 
-    def search_memory(
+    def find_relevant_memories(
         self,
         query: str,
         project: str | None = None,
@@ -80,7 +80,7 @@ class MemoryService:
         threshold: float = 0.7,
         after_date: str | None = None,
         before_date: str | None = None,
-    ) -> list[MemoryResult]:
+    ) -> list[RetrievedMemory]:
         """
         Search memories using semantic similarity.
 
@@ -97,65 +97,65 @@ class MemoryService:
             List of matching memories with scores
         """
         # Generate query embedding
-        query_embedding = embedding_service.encode(query)
+        query_embedding_vector = vectorizer.generate_embedding(query)
 
         # Get all memories (with optional filters)
-        all_memories = db.get_all_memories()
+        all_memory_records = db_layer.fetch_all_active_memories()
 
         # Filter by project and tags if specified
         if project:
-            all_memories = [m for m in all_memories if m.project == project]
+            all_memory_records = [m for m in all_memory_records if m.project == project]
 
         if tags:
-            all_memories = [m for m in all_memories if any(tag in m.tags for tag in tags)]
+            all_memory_records = [m for m in all_memory_records if any(tag in m.tags for tag in tags)]
 
         # Filter by date range
         if after_date:
             try:
-                after_ts = int(
-                    datetime.fromisoformat(after_date.replace("Z", _TIMEZONE_OFFSET)).timestamp()
+                after_ts_val = int(
+                    datetime.fromisoformat(after_date.replace("Z", UTC_OFFSET_STR)).timestamp()
                 )
-                all_memories = [m for m in all_memories if m.created_at >= after_ts]
+                all_memory_records = [m for m in all_memory_records if m.created_at >= after_ts_val]
             except ValueError:
                 pass  # Ignore invalid date format
 
         if before_date:
             try:
-                before_ts = int(
-                    datetime.fromisoformat(before_date.replace("Z", _TIMEZONE_OFFSET)).timestamp()
+                before_ts_val = int(
+                    datetime.fromisoformat(before_date.replace("Z", UTC_OFFSET_STR)).timestamp()
                 )
-                all_memories = [m for m in all_memories if m.created_at <= before_ts]
+                all_memory_records = [m for m in all_memory_records if m.created_at <= before_ts_val]
             except ValueError:
                 pass  # Ignore invalid date format
 
         # Calculate similarities
-        results: list[tuple[Memory, float]] = []
-        for memory in all_memories:
-            if memory.embedding is None:
+        scored_results: list[tuple[MemoryRecord, float]] = []
+        for record in all_memory_records:
+            if record.embedding is None:
                 continue
 
-            score = embedding_service.cosine_similarity(query_embedding, memory.embedding)
-            if score >= threshold:
-                results.append((memory, score))
+            similarity_score = vectorizer.calculate_cosine_similarity(query_embedding_vector, record.embedding)
+            if similarity_score >= threshold:
+                scored_results.append((record, similarity_score))
 
         # Sort by score (descending) and take top-k
-        results.sort(key=lambda x: x[1], reverse=True)
-        results = results[:limit]
+        scored_results.sort(key=lambda x: x[1], reverse=True)
+        top_results = scored_results[:limit]
 
         # Convert to MemoryResult
         return [
-            MemoryResult(
+            RetrievedMemory(
                 id=memory.id,
                 text=memory.text,
                 score=round(score, 4),
                 project=memory.project,
                 tags=memory.tags,
-                created_at=format_timestamp(memory.created_at),
+                created_at=timestamp_to_iso_str(memory.created_at),
             )
-            for memory, score in results
+            for memory, score in top_results
         ]
 
-    def list_memories(
+    def get_all_memories_paginated(
         self,
         project: str | None = None,
         tags: list[str] | None = None,
@@ -163,7 +163,7 @@ class MemoryService:
         limit: int = 20,
         sort: str = "date",
         search_query: str | None = None,
-    ) -> tuple[list[MemoryResult], int]:
+    ) -> tuple[list[RetrievedMemory], int]:
         """
         List memories with pagination.
 
@@ -178,59 +178,59 @@ class MemoryService:
         Returns:
             Tuple of (memories, total_count)
         """
-        offset = (page - 1) * limit
+        page_offset = (page - 1) * limit
 
         # Get all memories for relevance sorting, or use database pagination for date
         if sort == "relevance" and search_query:
-            all_memories = db.list_memories(project=project, tags=tags, limit=10000, offset=0)
-            total_count = len(all_memories)
+            all_records = db_layer.retrieve_paginated_memories(project=project, tags=tags, limit=10000, offset=0)
+            total_item_count = len(all_records)
 
             # Generate query embedding and calculate scores
-            query_embedding = embedding_service.encode(search_query)
-            scored_memories = []
+            query_emb = vectorizer.generate_embedding(search_query)
+            memories_with_scores = []
 
-            for memory in all_memories:
-                if memory.embedding:
-                    score = embedding_service.cosine_similarity(query_embedding, memory.embedding)
-                    scored_memories.append((memory, score))
+            for record in all_records:
+                if record.embedding:
+                    relevance_score = vectorizer.calculate_cosine_similarity(query_emb, record.embedding)
+                    memories_with_scores.append((record, relevance_score))
 
             # Sort by relevance score
-            scored_memories.sort(key=lambda x: x[1], reverse=True)
+            memories_with_scores.sort(key=lambda x: x[1], reverse=True)
 
             # Paginate
-            paginated = scored_memories[offset : offset + limit]
+            paginated_list = memories_with_scores[page_offset : page_offset + limit]
 
-            results = [
-                MemoryResult(
+            final_results = [
+                RetrievedMemory(
                     id=memory.id,
                     text=memory.text,
                     score=round(score, 4),
                     project=memory.project,
                     tags=memory.tags,
-                    created_at=format_timestamp(memory.created_at),
+                    created_at=timestamp_to_iso_str(memory.created_at),
                 )
-                for memory, score in paginated
+                for memory, score in paginated_list
             ]
         else:
             # Default: sort by date
-            memories = db.list_memories(project=project, tags=tags, limit=limit, offset=offset)
-            total_count = db.count_memories(project=project, tags=tags)
+            memory_records = db_layer.retrieve_paginated_memories(project=project, tags=tags, limit=limit, offset=page_offset)
+            total_item_count = db_layer.count_total_memories(project=project, tags=tags)
 
-            results = [
-                MemoryResult(
+            final_results = [
+                RetrievedMemory(
                     id=memory.id,
                     text=memory.text,
                     score=None,
                     project=memory.project,
                     tags=memory.tags,
-                    created_at=format_timestamp(memory.created_at),
+                    created_at=timestamp_to_iso_str(memory.created_at),
                 )
-                for memory in memories
+                for memory in memory_records
             ]
 
-        return results, total_count
+        return final_results, total_item_count
 
-    def delete_memory(self, memory_id: str) -> bool:
+    def remove_memory_by_id(self, memory_id: str) -> bool:
         """
         Delete a memory by ID.
 
@@ -240,14 +240,14 @@ class MemoryService:
         Returns:
             True if deleted, False if not found
         """
-        deleted = db.delete_memory(memory_id)
-        if deleted:
-            logger.info(f"Memory deleted: {memory_id}")
+        was_deleted = db_layer.hard_delete_memory(memory_id)
+        if was_deleted:
+            logger.info(f"Memory record permanently deleted: {memory_id}")
         else:
-            logger.warning(f"Memory not found: {memory_id}")
-        return deleted
+            logger.warning(f"Could not find memory record to delete: {memory_id}")
+        return was_deleted
 
-    def bulk_delete(self, project: str | None = None, before_date: str | None = None) -> int:
+    def remove_memories_in_bulk(self, project: str | None = None, before_date: str | None = None) -> int:
         """
         Bulk delete memories.
 
@@ -258,28 +258,28 @@ class MemoryService:
         Returns:
             Number of deleted memories
         """
-        before_timestamp = None
+        cutoff_timestamp = None
         if before_date:
             try:
-                dt = datetime.fromisoformat(before_date.replace("Z", _TIMEZONE_OFFSET))
-                before_timestamp = int(dt.timestamp())
+                dt_obj = datetime.fromisoformat(before_date.replace("Z", UTC_OFFSET_STR))
+                cutoff_timestamp = int(dt_obj.timestamp())
             except ValueError as e:
-                raise ValueError(f"Invalid date format: {before_date}") from e
+                raise ValueError(f"Date format is invalid: {before_date}") from e
 
-        count = db.bulk_delete(project=project, before_timestamp=before_timestamp)
-        logger.info(f"Bulk deleted {count} memories")
-        return count
+        deleted_count = db_layer.hard_bulk_delete(project=project, before_timestamp=cutoff_timestamp)
+        logger.info(f"Bulk deletion complete. {deleted_count} records removed.")
+        return deleted_count
 
-    def get_stats(self) -> dict[str, Any]:
+    def fetch_service_analytics(self) -> dict[str, Any]:
         """
         Get memory statistics.
 
         Returns:
             Dictionary with stats
         """
-        return db.get_stats()
+        return db_layer.collect_database_statistics()
 
-    def export_memories(
+    def dump_memories_to_format(
         self, format: str = "json", project: str | None = None
     ) -> str | dict[str, Any]:
         """
@@ -292,7 +292,7 @@ class MemoryService:
         Returns:
             Exported data as string or dict
         """
-        memories = db.list_memories(project=project, limit=10000)
+        all_memories = db_layer.retrieve_paginated_memories(project=project, limit=10000)
 
         if format == "json":
             return {
@@ -302,24 +302,24 @@ class MemoryService:
                         "text": m.text,
                         "project": m.project,
                         "tags": m.tags,
-                        "created_at": format_timestamp(m.created_at),
+                        "created_at": timestamp_to_iso_str(m.created_at),
                     }
-                    for m in memories
+                    for m in all_memories
                 ]
             }
         elif format == "markdown":
-            lines = ["# Memory Export\n"]
-            for m in memories:
-                lines.append(f"## {m.id}")
-                lines.append(f"**Project**: {m.project or 'None'}")
-                lines.append(f"**Tags**: {', '.join(m.tags) if m.tags else 'None'}")
-                lines.append(f"**Created**: {format_timestamp(m.created_at)}")
-                lines.append(f"\n{m.text}\n")
-                lines.append("---\n")
-            return "\n".join(lines)
+            md_lines = ["# Memory Export\n"]
+            for m in all_memories:
+                md_lines.append(f"## {m.id}")
+                md_lines.append(f"**Project**: {m.project or 'None'}")
+                md_lines.append(f"**Tags**: {', '.join(m.tags) if m.tags else 'None'}")
+                md_lines.append(f"**Created**: {timestamp_to_iso_str(m.created_at)}")
+                md_lines.append(f"\n{m.text}\n")
+                md_lines.append("---\n")
+            return "\n".join(md_lines)
         else:
-            raise ValueError(f"Unsupported format: {format}")
+            raise ValueError(f"Format not supported: {format}")
 
 
 # Global memory service instance
-memory_service = MemoryService()
+cognitive_store_instance = CognitiveStore()
